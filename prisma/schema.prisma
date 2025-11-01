@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// /* ----------------------- USERS ----------------------- */
+model User {
+  id            Int                @id @default(autoincrement())
+  firstName     String
+  lastName      String
+  email         String
+  phone         String
+  createdAt     DateTime           @default(now())
+  distributions DistributionUser[]
+  assignments   Assignment[]
+}
+
+// /* ----------------------- OBJECTS / TYPES / PARTS ----------------------- */
+model Object {
+  id    Int    @id @default(autoincrement())
+  name  String @unique
+  types Type[]
+}
+
+model Type {
+  id         Int                     @id @default(autoincrement())
+  name       String
+  objectId   Int
+  object     Object                  @relation(fields: [objectId], references: [id], onDelete: Cascade)
+  parts      Part[]
+  selections DistributionSelection[]
+}
+
+model Part {
+  id          Int          @id @default(autoincrement())
+  name        String
+  quantity    Int          @default(1) // how many in this type
+  typeId      Int
+  type        Type         @relation(fields: [typeId], references: [id], onDelete: Cascade)
+  assignments Assignment[]
+}
+
+// /* ----------------------- DISTRIBUTION SETUP ----------------------- */
+model Distribution {
+  id           Int                     @id @default(autoincrement())
+  name         String
+  createdAt    DateTime                @default(now())
+  participants DistributionUser[]
+  selections   DistributionSelection[]
+  assignments  Assignment[]
+}
+
+// /* Many-to-many: which users participate in which distributions */
+model DistributionUser {
+  userId         Int
+  distributionId Int
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  distribution   Distribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, distributionId])
+}
+
+// /* Which object-types are included in a distribution (with optional count) */
+model DistributionSelection {
+  id             Int          @id @default(autoincrement())
+  distributionId Int
+  typeId         Int
+  count          Int          @default(1) // how many of this type in the distribution
+  distribution   Distribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+  type           Type         @relation(fields: [typeId], references: [id], onDelete: Cascade)
+}
+
+// /* ----------------------- ASSIGNMENTS (algorithm result) ----------------------- */
+model Assignment {
+  id             Int          @id @default(autoincrement())
+  userId         Int
+  partId         Int
+  distributionId Int
+  quantity       Int          @default(1)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  part           Part         @relation(fields: [partId], references: [id], onDelete: Cascade)
+  distribution   Distribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
+}
