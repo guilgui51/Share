@@ -13,9 +13,10 @@ export function registerObjectHandlers() {
         return prisma.object.findMany({
             orderBy: { id: "asc" },
             include: {
+                parts: true,
                 types: {
                     include: {
-                        parts: true,
+                        typeParts: { include: { part: true } },
                     },
                 },
             },
@@ -30,7 +31,19 @@ export function registerObjectHandlers() {
             },
         });
 
-        // Step 2 — Create all types and their parts based on shared part definitions
+        // Step 2 — Create all object-level parts
+        const partRecords: Record<string, number> = {};
+        for (const partDef of data.parts) {
+            const part = await prisma.part.create({
+                data: {
+                    name: partDef.name,
+                    objectId: createdObject.id,
+                },
+            });
+            partRecords[partDef.name] = part.id;
+        }
+
+        // Step 3 — Create types and TypePart join records
         for (const typeData of data.types) {
             const type = await prisma.type.create({
                 data: {
@@ -39,15 +52,14 @@ export function registerObjectHandlers() {
                 },
             });
 
-            // For each object-level part, create a part record for this type
             for (const partDef of data.parts) {
                 const quantity = typeData.quantities?.[partDef.name] ?? 0;
                 if (quantity > 0) {
-                    await prisma.part.create({
+                    await prisma.typePart.create({
                         data: {
-                            name: partDef.name,
-                            quantity,
                             typeId: type.id,
+                            partId: partRecords[partDef.name],
+                            quantity,
                         },
                     });
                 }
@@ -57,7 +69,10 @@ export function registerObjectHandlers() {
         // Return the fully populated object
         return prisma.object.findUnique({
             where: { id: createdObject.id },
-            include: { types: { include: { parts: true } } },
+            include: {
+                parts: true,
+                types: { include: { typeParts: { include: { part: true } } } },
+            },
         });
     });
 
@@ -68,10 +83,23 @@ export function registerObjectHandlers() {
             data: { name: data.name },
         });
 
-        // Step 2 — Delete old types and parts (cascade)
+        // Step 2 — Delete old types (cascades TypePart) and old parts
         await prisma.type.deleteMany({ where: { objectId: id } });
+        await prisma.part.deleteMany({ where: { objectId: id } });
 
-        // Step 3 — Recreate new types and parts from fresh data
+        // Step 3 — Recreate parts at object level
+        const partRecords: Record<string, number> = {};
+        for (const partDef of data.parts) {
+            const part = await prisma.part.create({
+                data: {
+                    name: partDef.name,
+                    objectId: id,
+                },
+            });
+            partRecords[partDef.name] = part.id;
+        }
+
+        // Step 4 — Recreate types and TypePart join records
         for (const typeData of data.types) {
             const type = await prisma.type.create({
                 data: {
@@ -83,21 +111,24 @@ export function registerObjectHandlers() {
             for (const partDef of data.parts) {
                 const quantity = typeData.quantities?.[partDef.name] ?? 0;
                 if (quantity > 0) {
-                    await prisma.part.create({
+                    await prisma.typePart.create({
                         data: {
-                            name: partDef.name,
-                            quantity,
                             typeId: type.id,
+                            partId: partRecords[partDef.name],
+                            quantity,
                         },
                     });
                 }
             }
         }
 
-        // Step 4 — Return updated record with nested parts
+        // Step 5 — Return updated record
         return prisma.object.findUnique({
             where: { id },
-            include: { types: { include: { parts: true } } },
+            include: {
+                parts: true,
+                types: { include: { typeParts: { include: { part: true } } } },
+            },
         });
     });
 

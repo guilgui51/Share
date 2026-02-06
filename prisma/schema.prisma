@@ -27,6 +27,7 @@ model Object {
   id    Int    @id @default(autoincrement())
   name  String @unique
   types Type[]
+  parts Part[]
 }
 
 model Type {
@@ -34,17 +35,31 @@ model Type {
   name       String
   objectId   Int
   object     Object                  @relation(fields: [objectId], references: [id], onDelete: Cascade)
-  parts      Part[]
+  typeParts  TypePart[]
   selections DistributionSelection[]
+  assignments Assignment[]
 }
 
 model Part {
   id          Int          @id @default(autoincrement())
   name        String
-  quantity    Int          @default(1) // how many in this type
-  typeId      Int
-  type        Type         @relation(fields: [typeId], references: [id], onDelete: Cascade)
+  objectId    Int
+  object      Object       @relation(fields: [objectId], references: [id], onDelete: Cascade)
+  typeParts   TypePart[]
   assignments Assignment[]
+
+  @@unique([name, objectId])
+}
+
+model TypePart {
+  id       Int  @id @default(autoincrement())
+  typeId   Int
+  partId   Int
+  quantity Int  @default(1)
+  type     Type @relation(fields: [typeId], references: [id], onDelete: Cascade)
+  part     Part @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  @@unique([typeId, partId])
 }
 
 // /* ----------------------- DISTRIBUTION SETUP ----------------------- */
@@ -82,9 +97,11 @@ model Assignment {
   id             Int          @id @default(autoincrement())
   userId         Int
   partId         Int
+  typeId         Int
   distributionId Int
   quantity       Int          @default(1)
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   part           Part         @relation(fields: [partId], references: [id], onDelete: Cascade)
+  type           Type         @relation(fields: [typeId], references: [id], onDelete: Cascade)
   distribution   Distribution @relation(fields: [distributionId], references: [id], onDelete: Cascade)
 }

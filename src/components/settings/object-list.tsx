@@ -114,16 +114,16 @@ export default function ObjectList() {
                                                 {type.name}
                                             </div>
 
-                                            {type.parts.length === 0 && (
+                                            {type.typeParts.length === 0 && (
                                                 <p className="text-gray-500">No parts.</p>
                                             )}
 
                                             <ul className="list-disc ml-5 text-gray-300">
-                                                {type.parts.map((part: any) => (
-                                                    <li key={part.id}>
-                                                        {part.name}{" "}
+                                                {type.typeParts.map((tp: any) => (
+                                                    <li key={tp.id}>
+                                                        {tp.part.name}{" "}
                                                         <span className="text-gray-500">
-                              (x{part.quantity})
+                              (x{tp.quantity})
                             </span>
                                                     </li>
                                                 ))}

@@ -59,8 +59,9 @@ declare global {
             part: {
                 id: number;
                 name: string;
-                type: { id: number; name: string; object: { id: number; name: string } };
+                object: { id: number; name: string };
             };
+            type: { id: number; name: string; object: { id: number; name: string } };
         }[];
     }
 

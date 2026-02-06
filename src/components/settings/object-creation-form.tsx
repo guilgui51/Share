@@ -28,9 +28,9 @@ export default function ObjectCreationForm({
             const allPartNames = new Set<string>();
             const typesWithQuantities = initialData.types?.map((t: any) => {
                 const quantities: Record<string, number> = {};
-                t.parts?.forEach((p: any) => {
-                    allPartNames.add(p.name);
-                    quantities[p.name] = p.quantity ?? 0;
+                t.typeParts?.forEach((tp: any) => {
+                    allPartNames.add(tp.part.name);
+                    quantities[tp.part.name] = tp.quantity ?? 0;
                 });
                 return { name: t.name, quantities };
             });

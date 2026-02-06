@@ -46,8 +46,8 @@ export default function Home() {
                     rec.items.push({
                         name: a.part.name,
                         qty: a.quantity,
-                        type: a.part.type.name,
-                        object: a.part.type.object.name,
+                        type: a.type.name,
+                        object: a.part.object.name,
                     });
                 });
                 return Array.from(map.values());

@@ -69,7 +69,6 @@ export default function DistributionCreationForm({
     }, [objects, typeSearch]);
 
     const incType = (typeId: number, label: string) => {
-        console.log('increasing')
         setSelectedTypes((prev) => {
             const idx = prev.findIndex((x) => x.typeId === typeId);
             if (idx === -1) return [...prev, { typeId, label, count: 1 }];

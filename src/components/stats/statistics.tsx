@@ -139,8 +139,8 @@ export default function Statistics() {
 
         distributions.forEach((d) =>
             d.assignments.forEach((a) => {
-                const objectName = a.part.type.object.name;
-                const typeName = a.part.type.name;
+                const objectName = a.part.object.name;
+                const typeName = a.type.name;
                 const key = `${objectName} / ${typeName}`;
 
                 map.set(key, {
@@ -234,6 +234,32 @@ export default function Statistics() {
         });
 
         return data;
+    }, [users, distributions]);
+
+    // --- Heatmap par part : répartition par objet/part/utilisateur ---
+    const perPartData = useMemo(() => {
+        // Map<objectName, Map<partName, Map<userId, totalQty>>>
+        const objectMap = new Map<string, Map<string, Map<number, number>>>();
+        const involvedUserIds = new Set<number>();
+
+        distributions.forEach((d) =>
+            d.assignments.forEach((a) => {
+                const objName = a.part.object.name;
+                const partName = a.part.name;
+                const userId = a.user.id;
+                involvedUserIds.add(userId);
+
+                if (!objectMap.has(objName)) objectMap.set(objName, new Map());
+                const parts = objectMap.get(objName)!;
+                if (!parts.has(partName)) parts.set(partName, new Map());
+                const userMap = parts.get(partName)!;
+                userMap.set(userId, (userMap.get(userId) || 0) + a.quantity);
+            })
+        );
+
+        const involvedUsers = users.filter((u) => involvedUserIds.has(u.id));
+
+        return { objectMap, involvedUsers };
     }, [users, distributions]);
 
     if (loading)
@@ -476,6 +502,65 @@ export default function Statistics() {
                     </tbody>
                 </table>
             </div>
+
+            {/* Heatmap par part */}
+            {Array.from(perPartData.objectMap.entries()).map(([objectName, partsMap]) => (
+                <div key={objectName} className="bg-gray-900 border border-gray-800 rounded-md p-4 shadow-md overflow-x-auto">
+                    <h3 className="text-lg font-semibold mb-4 text-gray-200">
+                        Répartition par part — {objectName}
+                    </h3>
+                    <table className="min-w-full border-collapse text-sm">
+                        <thead>
+                        <tr className="text-gray-400 border-b border-gray-800">
+                            <th className="text-left p-2">Part</th>
+                            {perPartData.involvedUsers.map((u) => (
+                                <th
+                                    key={u.id}
+                                    className="text-right p-2"
+                                    style={{ color: userColorMap[u.id] }}
+                                >
+                                    {u.firstName} {u.lastName}
+                                </th>
+                            ))}
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {Array.from(partsMap.entries()).map(([partName, userMap]) => {
+                            const quantities = perPartData.involvedUsers.map((u) => userMap.get(u.id) || 0);
+                            const nonZero = quantities.filter((q) => q > 0);
+                            const maxQty = nonZero.length > 0 ? Math.max(...nonZero) : 0;
+                            const minQty = nonZero.length > 1 ? Math.min(...nonZero) : -1;
+                            return (
+                                <tr key={partName} className="border-b border-gray-800 hover:bg-gray-800/30 transition">
+                                    <td className="p-2 text-gray-300">{partName}</td>
+                                    {perPartData.involvedUsers.map((u) => {
+                                        const qty = userMap.get(u.id) || 0;
+                                        const isMax = qty > 0 && qty === maxQty;
+                                        const isMin = qty > 0 && qty === minQty && minQty < maxQty;
+                                        return (
+                                            <td
+                                                key={u.id}
+                                                className={`p-2 text-right font-mono ${
+                                                    qty === 0
+                                                        ? "text-gray-600"
+                                                        : isMax
+                                                            ? "text-green-400 font-semibold"
+                                                            : isMin
+                                                                ? "text-red-400 font-semibold"
+                                                                : "text-gray-200"
+                                                }`}
+                                            >
+                                                {qty === 0 ? "—" : qty}
+                                            </td>
+                                        );
+                                    })}
+                                </tr>
+                            );
+                        })}
+                        </tbody>
+                    </table>
+                </div>
+            ))}
         </div>
     );
 }

@@ -7,7 +7,7 @@ export type DistributionsIPC = {
     "distributions:getAll": () => Promise<any[]>;
     "distributions:create": (payload: DistributionCreatePayload) => Promise<any>;
     "distributions:cancel": (id: number) => Promise<boolean>;
-}
+};
 
 // Global cache of user -> part -> quantity (for fairness decisions)
 type UserPartTotals = Record<number, Record<number, number>>;
@@ -51,9 +51,10 @@ export function registerDistributionHandlers() {
                     include: {
                         user: true,
                         part: {
-                            include: {
-                                type: { include: { object: true } },
-                            },
+                            include: { object: true },
+                        },
+                        type: {
+                            include: { object: true },
                         },
                     },
                 },
@@ -62,72 +63,76 @@ export function registerDistributionHandlers() {
     });
 
     // CREATE + SIMPLE ALGO
-    ipcMain.handle("distributions:create", async (_e, payload: DistributionCreatePayload) => {
-        const settings = loadSettings(); // global algorithm settings
-        const { name, participantIds, selections } = payload;
+    ipcMain.handle(
+        "distributions:create",
+        async (_e, payload: DistributionCreatePayload) => {
+            const settings = loadSettings(); // global algorithm settings
+            const { name, participantIds, selections } = payload;
 
-        // 1️⃣ Create base distribution
-        const distribution = await prisma.distribution.create({
-            data: {
-                name,
-                participants: {
-                    create: participantIds.map((id: number) => ({ userId: id })),
-                },
-                selections: {
-                    create: selections.map((s) => ({
-                        typeId: s.typeId,
-                        count: s.count,
-                    })),
-                },
-            },
-        });
-
-        // 2️⃣ Load participants + parts
-        const participants = await prisma.user.findMany({
-            where: { id: { in: participantIds } },
-            include: { assignments: true },
-        });
-
-        const selectedTypes = await prisma.type.findMany({
-            where: { id: { in: selections.map((s) => s.typeId) } },
-            include: { parts: true },
-        });
-
-        // Flatten list of all parts to distribute
-        const allParts: { partId: number; quantity: number }[] = [];
-        for (const sel of selections) {
-            const type = selectedTypes.find((t) => t.id === sel.typeId);
-            if (!type) continue;
-            for (const part of type.parts) {
-                for (let i = 0; i < sel.count * part.quantity; i++) {
-                    allParts.push({ partId: part.id, quantity: 1 });
-                }
-            }
-        }
-
-        // 3️⃣ Distribute parts using selected algorithm
-        await distributeParts({
-            distributionId: distribution.id,
-            participants,
-            partsPool: allParts,
-            settings,
-        });
-
-        // 4️⃣ Return updated distribution
-        return prisma.distribution.findUnique({
-            where: { id: distribution.id },
-            include: {
-                participants: { include: { user: true } },
-                selections: { include: { type: { include: { object: true } } } },
-                assignments: {
-                    include: {
-                        user: true,
-                        part: { include: { type: { include: { object: true } } } },
+            // 1️⃣ Create base distribution
+            const distribution = await prisma.distribution.create({
+                data: {
+                    name,
+                    participants: {
+                        create: participantIds.map((id: number) => ({ userId: id })),
+                    },
+                    selections: {
+                        create: selections.map((s) => ({
+                            typeId: s.typeId,
+                            count: s.count,
+                        })),
                     },
                 },
-            },
-        });
-    });
+            });
+
+            // 2️⃣ Load participants + parts via typeParts
+            const participants = await prisma.user.findMany({
+                where: { id: { in: participantIds } },
+                include: { assignments: true },
+            });
+
+            const selectedTypes = await prisma.type.findMany({
+                where: { id: { in: selections.map((s) => s.typeId) } },
+                include: { typeParts: { include: { part: true } } },
+            });
+
+            // Flatten list of all parts to distribute (now with typeId)
+            const allParts: { partId: number; typeId: number; quantity: number }[] = [];
+            for (const sel of selections) {
+                const type = selectedTypes.find((t) => t.id === sel.typeId);
+                if (!type) continue;
+                for (const tp of type.typeParts) {
+                    for (let i = 0; i < sel.count * tp.quantity; i++) {
+                        allParts.push({ partId: tp.partId, typeId: type.id, quantity: 1 });
+                    }
+                }
+            }
+
+            // 3️⃣ Distribute parts using selected algorithm (now 3-phase: plan → prefs → optimize)
+            await distributeParts({
+                distributionId: distribution.id,
+                participants,
+                partsPool: allParts,
+                settings,
+            });
+
+            // 4️⃣ Return updated distribution
+            return prisma.distribution.findUnique({
+                where: { id: distribution.id },
+                include: {
+                    participants: { include: { user: true } },
+                    selections: { include: { type: { include: { object: true } } } },
+                    assignments: {
+                        include: {
+                            user: true,
+                            part: { include: { object: true } },
+                            type: { include: { object: true } },
+                        },
+                    },
+                },
+            });
+        }
+    );
 
     // CANCEL
     ipcMain.handle("distributions:cancel", async (_e, id: number) => {
@@ -136,14 +141,14 @@ export function registerDistributionHandlers() {
     });
 }
 
-
 interface DistributeParams {
     distributionId: number;
     participants: any[];
-    partsPool: { partId: number; quantity: number }[];
+    partsPool: { partId: number; typeId: number; quantity: number }[];
     settings: AppSettings;
 }
 
+/** ---------- NEW: planning + preferences + optimization orchestration ---------- */
 async function distributeParts({
                                    distributionId,
                                    participants,
@@ -153,159 +158,228 @@ async function distributeParts({
     const { algorithmType, algorithmCount } = settings;
 
     const userIds = participants.map((p) => p.id);
+    // historical totals per (user, partId)
     const userPartTotals = await buildUserPartTotals(userIds);
 
+    // 1) PLAN how many items each participant should receive
+    let plan: Record<number, number> = {};
     switch (algorithmType) {
         case "random":
-            await algoRandom(distributionId, participants, partsPool);
+            plan = buildPlanRandom(participants, partsPool.length);
             break;
         case "less":
-            await algoLess(distributionId, participants, partsPool, userPartTotals);
+            plan = await buildPlanLess(participants, partsPool.length);
             break;
         case "share_less":
-            await algoShare(distributionId, participants, partsPool, algorithmCount, "less", userPartTotals);
+            plan = await buildPlanShare(
+                participants,
+                partsPool.length,
+                algorithmCount,
+                "less"
+            );
             break;
         case "share_random":
-            await algoShare(distributionId, participants, partsPool, algorithmCount, "random", userPartTotals);
+            plan = await buildPlanShare(
+                participants,
+                partsPool.length,
+                algorithmCount,
+                "random"
+            );
             break;
     }
-}
 
+    // 2) Build per-user part preferences (how many of each partId they already own)
+    const userPreferences = buildUserPreferences(userIds, userPartTotals, partsPool);
 
-/* ---------------------------------------------------------------------- */
-/* 🔀 RANDOM — assign parts randomly */
-/* ---------------------------------------------------------------------- */
-async function algoRandom(distributionId: number, participants: any[], partsPool: any[]) {
-    for (const part of partsPool) {
-        const randomUser = participants[Math.floor(Math.random() * participants.length)];
-        await createAssignment(distributionId, randomUser.id, part.partId);
-    }
+    // 3) Optimize actual assignments based on plan + preferences
+    await optimizeDistribution(distributionId, partsPool, plan, userPreferences);
 }
 
 /* ---------------------------------------------------------------------- */
-/* 📉 LESS — give to users with fewest total parts first */
+/* 🔀 RANDOM — assign parts randomly (NOW: build plan only)               */
 /* ---------------------------------------------------------------------- */
-async function algoLess(
-    distributionId: number,
+function buildPlanRandom(
     participants: { id: number }[],
-    partsPool: { partId: number }[],
-    userPartTotals: UserPartTotals
-) {
-    // 1) Load total quantity per user across ALL past distributions (fairness)
-    const userTotals = await getUserPartTotals(participants.map((p) => p.id));
+    totalParts: number
+): Record<number, number> {
+    const plan: Record<number, number> = {};
+    for (const u of participants) plan[u.id] = 0;
 
-    // 2) Work on a local copy of the pool
-    const remaining = [...partsPool];
-
-    // 3) While there are parts, always pick the least-loaded user first
-    while (remaining.length > 0) {
-        // user with the fewest total parts so far
-        const targetUserId = Number(
-            Object.entries(userTotals).sort((a, b) => a[1] - b[1])[0][0]
-        );
-
-        // choose the best part for that user from the remaining pool
-        const { partId, index } = pickPreferredPart(remaining, targetUserId, userPartTotals);
-
-        // assign it
-        await createAssignment(distributionId, targetUserId, partId);
-
-        // update in-memory counts
-        userTotals[targetUserId] = (userTotals[targetUserId] || 0) + 1;
-        remaining.splice(index, 1);
+    for (let i = 0; i < totalParts; i++) {
+        const rnd = Math.floor(Math.random() * participants.length);
+        const userId = participants[rnd].id;
+        plan[userId] += 1;
     }
+    return plan;
 }
 
 /* ---------------------------------------------------------------------- */
-/* 🤝 SHARE_LESS / SHARE_RANDOM — hybrid logic */
+/* 📉 LESS — give to users with fewest total parts first (NOW: build plan)*/
 /* ---------------------------------------------------------------------- */
-async function algoShare(
-    distributionId: number,
-    participants: any[],
-    partsPool: any[],
+async function buildPlanLess(
+    participants: { id: number }[],
+    totalParts: number,
+    basePlan: Record<number, number> = {}
+): Promise<Record<number, number>> {
+    const plan: Record<number, number> = {};
+    for (const u of participants) plan[u.id] = 0;
+
+    // Base totals across ALL time (historical fairness)
+    const baseTotals = await getUserPartTotals(participants.map((p) => p.id));
+
+    // Combine historical totals + already distributed parts (but do not add to plan)
+    const runningTotals: Record<number, number> = {};
+    for (const u of participants) {
+        runningTotals[u.id] = (baseTotals[u.id] || 0) + (basePlan[u.id] || 0);
+    }
+
+    // Repeatedly give next unit to currently least-loaded user
+    for (let i = 0; i < totalParts; i++) {
+        const targetUserId = Number(
+            Object.entries(runningTotals).sort((a, b) => a[1] - b[1])[0][0]
+        );
+        plan[targetUserId] += 1;
+        runningTotals[targetUserId] += 1;
+    }
+
+    return plan;
+}
+
+/* ---------------------------------------------------------------------- */
+/* 🤝 SHARE_LESS / SHARE_RANDOM — hybrid (NOW: build plan)                */
+/* ---------------------------------------------------------------------- */
+async function buildPlanShare(
+    participants: { id: number }[],
+    totalParts: number,
     count: number,
-    fallback: "less" | "random",
-    userPartTotals: UserPartTotals
-) {
-    let remainingParts = [...partsPool];
+    fallback: "less" | "random"
+): Promise<Record<number, number>> {
+    const plan: Record<number, number> = {};
+    for (const u of participants) plan[u.id] = 0;
+
     const totalUsers = participants.length;
 
-    // Determine how many full share rounds we can do
-    const possibleRounds = Math.floor(remainingParts.length / totalUsers);
+    // how many full "everyone gets one" rounds are feasible
+    const possibleRounds = Math.floor(totalParts / totalUsers);
     const maxRounds =
-        count === 0 || count >= 9999
+        count === 0
             ? possibleRounds // share as much as possible
             : Math.min(count, possibleRounds);
 
-    // SHARE PHASE
-    for (let round = 0; round < maxRounds; round++) {
-        for (const user of participants) {
-            if (remainingParts.length === 0) break;
-
-            // pick a preferred part for this user
-            const nextPart = pickPreferredPart(remainingParts, user.id, userPartTotals);
-            await createAssignment(distributionId, user.id, nextPart.partId);
-
-            // remove that part from pool
-            remainingParts.splice(nextPart.index, 1);
-        }
+    // share phase
+    for (let r = 0; r < maxRounds; r++) {
+        for (const u of participants) plan[u.id] += 1;
     }
 
-    // FALLBACK PHASE
-    if (remainingParts.length > 0) {
-        if (fallback === "less")
-            await algoLess(distributionId, participants, remainingParts, userPartTotals);
-        else await algoRandom(distributionId, participants, remainingParts);
+    // leftover units
+    const used = maxRounds * totalUsers;
+    const remaining = totalParts - used;
+    if (remaining <= 0) return plan;
+
+    // FALLBACK PHASE — delegate to existing plan builders
+    let fallbackPlan: Record<number, number> = {};
+    if (fallback === "less") {
+        fallbackPlan = await buildPlanLess(participants, remaining, plan);
+    } else {
+        fallbackPlan = buildPlanRandom(participants, remaining);
     }
+
+    // Merge fallback allocation into current plan
+    for (const id of Object.keys(fallbackPlan)) {
+        plan[Number(id)] += fallbackPlan[Number(id)];
+    }
+
+    return plan;
 }
 
 /* ---------------------------------------------------------------------- */
-/* 🧩 Utility helpers */
+/* 🧩 Utilities: preferences + optimizer                                   */
 /* ---------------------------------------------------------------------- */
 
-/**
- * Pick the best next part for a user.
- * Tries to prefer parts the user has never received, then least-owned.
- */
-function pickPreferredPart(
-    partsPool: { partId: number }[],
-    userId: number,
-    userPartTotals: UserPartTotals
-): { partId: number; index: number } {
-    const userTotals = userPartTotals[userId] || {};
-
-    // 1️⃣ Collect all unique part IDs in pool
+// Build per-user preference map: for each user, a partId->ownedCount map.
+// Start from historical totals and ensure every available partId is present with default 0.
+function buildUserPreferences(
+    userIds: number[],
+    userPartTotals: UserPartTotals,
+    partsPool: { partId: number }[]
+): Record<number, Record<number, number>> {
+    // all available partIds in this run
     const availablePartIds = [...new Set(partsPool.map((p) => p.partId))];
 
-    // 2️⃣ Separate unseen vs seen parts
-    const unseen = availablePartIds.filter((pid) => !userTotals[pid]);
-    if (unseen.length > 0) {
-        // pick first unseen part from pool
-        const pid = unseen[0];
-        const index = partsPool.findIndex((p) => p.partId === pid);
-        userPartTotals[userId][pid] = (userPartTotals[userId][pid] || 0) + 1;
-        return { partId: pid, index };
-    }
-
-    // 3️⃣ If all parts are seen, pick the one with the least owned quantity
-    let bestPartId = availablePartIds[0];
-    let bestQty = userTotals[bestPartId] ?? 0;
-    for (const pid of availablePartIds) {
-        const qty = userTotals[pid] ?? 0;
-        if (qty < bestQty) {
-            bestQty = qty;
-            bestPartId = pid;
+    const prefs: Record<number, Record<number, number>> = {};
+    for (const uid of userIds) {
+        const base = { ...(userPartTotals[uid] || {}) };
+        for (const pid of availablePartIds) {
+            if (base[pid] === undefined) base[pid] = 0;
         }
+        prefs[uid] = base;
     }
-
-    const index = partsPool.findIndex((p) => p.partId === bestPartId);
-    userPartTotals[userId][bestPartId] = (userPartTotals[userId][bestPartId] || 0) + 1;
-
-    return { partId: bestPartId, index };
+    return prefs;
 }
 
+// Assign parts to match the requested plan, using preferences to pick the least-owned partId each time.
+// Writes assignments incrementally (same behavior as your current code).
+async function optimizeDistribution(
+    distributionId: number,
+    partsPool: { partId: number; typeId: number }[],
+    plan: Record<number, number>,
+    userPreferences: Record<number, Record<number, number>>
+) {
+    // build availability counts per partId, tracking typeId for each unit
+    const availableUnits: { partId: number; typeId: number }[] = [...partsPool];
+
+    // helper: pick best available partId for a user (min preference count)
+    const pickBestPartForUser = (userId: number): { partId: number; typeId: number; index: number } | null => {
+        const prefs = userPreferences[userId];
+        if (availableUnits.length === 0) return null;
+
+        // Find the unit with the lowest preference score
+        let bestIdx = 0;
+        let bestScore = prefs[availableUnits[0].partId] ?? 0;
+
+        for (let i = 1; i < availableUnits.length; i++) {
+            const score = prefs[availableUnits[i].partId] ?? 0;
+            if (score < bestScore) {
+                bestScore = score;
+                bestIdx = i;
+            }
+        }
+
+        return { ...availableUnits[bestIdx], index: bestIdx };
+    };
+
+    // iterate users; for each, assign as many as plan dictates
+    const userIds = Object.keys(plan).map(Number);
+
+    // To avoid always favoring early users on ties, we can shuffle the iteration order per "round"
+    const maxGive = Math.max(...userIds.map((uid) => plan[uid] || 0));
+    for (let step = 0; step < maxGive; step++) {
+        for (const uid of userIds) {
+            if ((plan[uid] || 0) <= 0) continue;
+
+            // Give one unit this pass
+            const pick = pickBestPartForUser(uid);
+            if (pick == null) continue;
+
+            // write incrementally
+            await createAssignment(distributionId, uid, pick.partId, pick.typeId);
+
+            // update live state
+            availableUnits.splice(pick.index, 1);
+            userPreferences[uid][pick.partId] = (userPreferences[uid][pick.partId] || 0) + 1;
+            plan[uid] -= 1;
+        }
+    }
+}
+
+/* ---------------------------------------------------------------------- */
+/* 🧮 Totals + incremental write                                          */
+/* ---------------------------------------------------------------------- */
+
 // get user totals (sum of all quantities from previous distributions)
-async function getUserPartTotals(userIds: number[]): Promise<Record<number, number>> {
+async function getUserPartTotals(
+    userIds: number[]
+): Promise<Record<number, number>> {
     const assignments = await prisma.assignment.groupBy({
         by: ["userId"],
         _sum: { quantity: true },
@@ -319,9 +393,14 @@ async function getUserPartTotals(userIds: number[]): Promise<Record<number, numb
 }
 
 // Upsert assignment (increment if already exists)
-async function createAssignment(distributionId: number, userId: number, partId: number) {
+async function createAssignment(
+    distributionId: number,
+    userId: number,
+    partId: number,
+    typeId: number
+) {
     const existing = await prisma.assignment.findFirst({
-        where: { userId, partId, distributionId },
+        where: { userId, partId, typeId, distributionId },
     });
 
     if (existing) {
@@ -331,7 +410,7 @@ async function createAssignment(distributionId: number, userId: number, partId: 
         });
     } else {
         await prisma.assignment.create({
-            data: { userId, partId, distributionId, quantity: 1 },
+            data: { userId, partId, typeId, distributionId, quantity: 1 },
         });
     }
 }
