@@ -1,7 +1,8 @@
 import {useEffect, useMemo, useState} from "react";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
-import {faChevronLeft, faChevronRight, faMinus, faPlus, faSearch, faXmark,} from "@fortawesome/free-solid-svg-icons";
-import Modal from "../shared/modal"; // ✅ use the shared modal
+import {faCheck, faChevronLeft, faChevronRight, faMinus, faPlus, faSearch, faXmark, faFilePdf,} from "@fortawesome/free-solid-svg-icons";
+import Modal from "../shared/modal";
+import {generateDistributionPDF} from "../../utils/pdf-export";
 
 interface Props {
     isOpen: boolean;
@@ -14,7 +15,7 @@ export default function DistributionCreationForm({
                                                      onClose,
                                                      onCreated,
                                                  }: Props) {
-    const [step, setStep] = useState<1 | 2>(1);
+    const [step, setStep] = useState<1 | 2 | 3>(1);
     const [name, setName] = useState("");
     const [userSearch, setUserSearch] = useState("");
     const [typeSearch, setTypeSearch] = useState("");
@@ -24,6 +25,7 @@ export default function DistributionCreationForm({
     const [selectedTypes, setSelectedTypes] = useState<
         { typeId: number; label: string; count: number }[]
     >([]);
+    const [result, setResult] = useState<DistributionCardDTO | null>(null);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -43,6 +45,7 @@ export default function DistributionCreationForm({
             setTypeSearch("");
             setSelectedUserIds([]);
             setSelectedTypes([]);
+            setResult(null);
         }
     }, [isOpen]);
 
@@ -98,7 +101,7 @@ export default function DistributionCreationForm({
             : selectedTypes.length > 0;
 
     const onStart = async () => {
-        await window.api["distributions:create"]({
+        const dist = await window.api["distributions:create"]({
             name: name.trim(),
             participantIds: selectedUserIds,
             selections: selectedTypes.map((s) => ({
@@ -106,8 +109,25 @@ export default function DistributionCreationForm({
                 count: s.count,
             })),
         });
-        onCreated();
+        setResult(dist);
+        setStep(3);
     };
+
+    const resultByUser = useMemo(() => {
+        if (!result) return [];
+        const map: Record<number, { user: User; total: number; parts: { name: string; object: string; type: string; qty: number }[] }> = {};
+        result.assignments.forEach(a => {
+            const uid = a.user.id;
+            if (!map[uid]) map[uid] = {user: a.user, total: 0, parts: []};
+            map[uid].total += a.quantity;
+            map[uid].parts.push({name: a.part.name, object: a.part.object.name, type: a.type.name, qty: a.quantity});
+        });
+        // Include participants with no assignments
+        result.participants.forEach(p => {
+            if (!map[p.user.id]) map[p.user.id] = {user: p.user, total: 0, parts: []};
+        });
+        return Object.values(map);
+    }, [result]);
 
     return (
         <Modal
@@ -125,7 +145,7 @@ export default function DistributionCreationForm({
 
             <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold">Assistant de distribution</h3>
-                <span className="text-sm text-gray-400">Étape {step} / 2</span>
+                <span className="text-sm text-gray-400">{step < 3 ? `Étape ${step} / 2` : "Résultat"}</span>
             </div>
 
             {/* Step 1 */}
@@ -267,20 +287,62 @@ export default function DistributionCreationForm({
                 </div>
             )}
 
+            {/* Step 3 — Preview */}
+            {step === 3 && result && (
+                <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-green-400">
+                        <FontAwesomeIcon icon={faCheck} className="w-4 h-4"/>
+                        <span className="font-medium">Distribution terminée</span>
+                    </div>
+
+                    <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                        {resultByUser.map(({user, total, parts}) => (
+                            <div key={user.id} className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="font-medium text-green-400">{user.firstName} {user.lastName}</span>
+                                    <span className="text-xs text-gray-400">{total} part{total > 1 ? "s" : ""}</span>
+                                </div>
+                                {parts.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {parts.map((p, i) => (
+                                            <span key={i} className="text-xs bg-gray-900 border border-gray-700 px-2 py-1 rounded-full">
+                                                {p.name} ×{p.qty}
+                                                <span className="ml-1.5 text-[10px] text-gray-500">{p.object} / {p.type}</span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span className="text-xs italic text-gray-500">N'a rien obtenu</span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Footer */}
             <div className="mt-6 flex items-center justify-between">
-                <button
-                    disabled={step === 1}
-                    onClick={() => setStep(1)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-md border transition
-          ${
-                        step === 1
-                            ? "border-gray-800 text-gray-500 cursor-not-allowed"
-                            : "border-gray-700 text-gray-200 hover:border-gray-600 cursor-pointer"
-                    }`}
-                >
-                    <FontAwesomeIcon icon={faChevronLeft} /> Précédent
-                </button>
+                {step === 3 ? (
+                    <button
+                        onClick={() => result && generateDistributionPDF(result)}
+                        className="flex items-center gap-2 px-3 py-2 rounded-md border border-gray-700 text-gray-200 hover:border-gray-600 transition cursor-pointer"
+                    >
+                        <FontAwesomeIcon icon={faFilePdf} className="w-4 h-4"/> Télécharger PDF
+                    </button>
+                ) : (
+                    <button
+                        disabled={step === 1}
+                        onClick={() => setStep(1)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-md border transition
+              ${
+                            step === 1
+                                ? "border-gray-800 text-gray-500 cursor-not-allowed"
+                                : "border-gray-700 text-gray-200 hover:border-gray-600 cursor-pointer"
+                        }`}
+                    >
+                        <FontAwesomeIcon icon={faChevronLeft} /> Précédent
+                    </button>
+                )}
 
                 {step === 1 ? (
                     <button
@@ -295,7 +357,7 @@ export default function DistributionCreationForm({
                     >
                         Suivant <FontAwesomeIcon icon={faChevronRight} />
                     </button>
-                ) : (
+                ) : step === 2 ? (
                     <button
                         disabled={!canNext}
                         onClick={onStart}
@@ -307,6 +369,13 @@ export default function DistributionCreationForm({
                         }`}
                     >
                         Commencer le partage
+                    </button>
+                ) : (
+                    <button
+                        onClick={onCreated}
+                        className="flex items-center gap-2 px-4 py-2 rounded-md bg-green-600 hover:bg-green-700 text-white transition cursor-pointer"
+                    >
+                        Fermer
                     </button>
                 )}
             </div>

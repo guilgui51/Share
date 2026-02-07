@@ -3,8 +3,9 @@ import {ObjectsIpcs, registerObjectHandlers} from "./objects";
 import {DistributionsIPC, registerDistributionHandlers} from "./distributions";
 import {registerSettingsHandlers, SettingsIPC} from "./settings";
 import {AppIpcs, registerAppHandlers} from "./app";
+import {DatabaseIPC, registerDatabaseHandlers} from "./database";
 
-export type IpcChannels = AppIpcs & UsersIpcs & ObjectsIpcs & DistributionsIPC & SettingsIPC;
+export type IpcChannels = AppIpcs & UsersIpcs & ObjectsIpcs & DistributionsIPC & SettingsIPC & DatabaseIPC;
 
 export function registerAllIpcHandlers() {
     registerAppHandlers();
@@ -12,4 +13,5 @@ export function registerAllIpcHandlers() {
     registerObjectHandlers();
     registerDistributionHandlers();
     registerSettingsHandlers();
+    registerDatabaseHandlers();
 }

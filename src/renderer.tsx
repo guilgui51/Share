@@ -8,6 +8,7 @@ import Statistics from "./components/stats/statistics";
 import UserList from "./components/settings/user-list";
 import ObjectList from "./components/settings/object-list";
 import Algorithm from "./components/settings/algorithm";
+import Admin from "./components/settings/admin";
 
 const container = document.getElementById('root');
 const root = createRoot(container!);
@@ -22,6 +23,7 @@ root.render(
                     <Route path="/settings/users" element={<UserList />} />
                     <Route path="/settings/pieces" element={<ObjectList />} />
                     <Route path="/settings/algorithm" element={<Algorithm />} />
+                    <Route path="/settings/admin" element={<Admin />} />
                 </Route>
             </Routes>
         </HashRouter>

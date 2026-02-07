@@ -1,7 +1,7 @@
 // src/components/Navbar.tsx
 import {useEffect, useState} from "react";
 import {NavLink, useLocation} from "react-router-dom";
-import {faChartPie, faChevronDown, faChevronRight, faClockRotateLeft, faCog, faCogs, faList, faPowerOff, faPuzzlePiece, faUsers,} from "@fortawesome/free-solid-svg-icons";
+import {faChartPie, faChevronDown, faChevronRight, faClockRotateLeft, faCog, faCogs, faDatabase, faList, faPowerOff, faPuzzlePiece, faUsers,} from "@fortawesome/free-solid-svg-icons";
 import {FontAwesomeIcon} from "@fortawesome/react-fontawesome";
 import logo from "../../assets/logo.png";
 
@@ -101,6 +101,12 @@ export default function Navbar() {
                                 <NavLink to="/settings/algorithm" className={subLinkClass}>
                                     <FontAwesomeIcon icon={faCogs} className="w-4 h-4 mr-2"/>
                                     Algorithme
+                                </NavLink>
+                            </li>
+                            <li>
+                                <NavLink to="/settings/admin" className={subLinkClass}>
+                                    <FontAwesomeIcon icon={faDatabase} className="w-4 h-4 mr-2"/>
+                                    Administration
                                 </NavLink>
                             </li>
                         </ul>

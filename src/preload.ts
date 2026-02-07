@@ -29,6 +29,8 @@ const channels: (keyof IpcChannels)[]= [
     "distributions:cancel",
     "settings:get",
     "settings:update",
+    "db:export",
+    "db:import",
 ];
 
 const api = createApi<IpcChannels>(channels);
