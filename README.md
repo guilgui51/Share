@@ -1,4 +1,4 @@
-# Share
+## Share
 
 A desktop application for fair item distribution among participants. Share manages users, objects (with types and parts), and distributions, applying fairness algorithms to assign items based on historical allocation patterns.
 
